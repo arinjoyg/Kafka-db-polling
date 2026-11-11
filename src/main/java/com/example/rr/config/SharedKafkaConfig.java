@@ -30,6 +30,15 @@ public class SharedKafkaConfig {
                 .build();
     }
 
+    /** Same partition count as the request topic: the recoverer keeps the source partition. */
+    @Bean
+    NewTopic requestDeadLetterTopic(AppProperties props) {
+        return TopicBuilder.name(props.topics().request() + ".DLT")
+                .partitions(props.topics().requestPartitions())
+                .replicas(props.topics().replicationFactor())
+                .build();
+    }
+
     @Bean
     NewTopic replyTopic(AppProperties props) {
         return TopicBuilder.name(props.topics().reply())

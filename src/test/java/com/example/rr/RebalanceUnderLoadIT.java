@@ -100,7 +100,7 @@ class RebalanceUnderLoadIT extends AbstractIntegrationTest {
                         "--spring.flyway.enabled=false",
                         "--spring.kafka.bootstrap-servers=" + KAFKA.getBootstrapServers(),
                         "--spring.datasource.url=" + jdbcUrlViaProxy(),
-                        "--spring.datasource.username=" + POSTGRES.getUsername(),
-                        "--spring.datasource.password=" + POSTGRES.getPassword());
+                        "--spring.datasource.username=" + ORACLE.getUsername(),
+                        "--spring.datasource.password=" + ORACLE.getPassword());
     }
 }

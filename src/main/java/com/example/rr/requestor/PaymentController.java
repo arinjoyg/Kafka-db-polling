@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 200 = committed (OK or DUPLICATE)
  * 202 = PENDING: no reply within the budget; the write may still land. Never report this as a failure.
- * 503 = send failed
+ * 503 = send failed, or intake closed for a DB switchover (with Retry-After)
  */
 @RestController
 @RequestMapping("/payments")
@@ -24,13 +24,21 @@ import org.springframework.web.bind.annotation.RestController;
 public class PaymentController {
 
     private final ReplyClient client;
+    private final IntakeGate gate;
 
-    public PaymentController(ReplyClient client) {
+    public PaymentController(ReplyClient client, IntakeGate gate) {
         this.client = client;
+        this.gate = gate;
     }
 
     @PostMapping
     public CompletableFuture<ResponseEntity<Outcome>> submit(@RequestBody PaymentCommand body) {
+        if (!gate.isOpen()) {
+            // Switchover in progress: fail fast and honestly rather than queue past the deadline.
+            return CompletableFuture.completedFuture(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", String.valueOf(IntakeGate.RETRY_AFTER_SECONDS))
+                    .<Outcome>build());
+        }
         body.validate();
         PaymentCommand cmd = (body.requestId() == null || body.requestId().isBlank())
                 ? body.withRequestId(UUID.randomUUID().toString())

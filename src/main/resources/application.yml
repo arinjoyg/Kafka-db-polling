@@ -39,14 +39,19 @@ spring:
         heartbeat.interval.ms: 3000
 
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/payments}
+    url: ${DB_URL:jdbc:oracle:thin:@localhost:1521/FREEPDB1}
     username: ${DB_USER:payments}
     password: ${DB_PASSWORD:payments}
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:20}
-      # 250ms is HikariCP's minimum. Pool exhaustion must surface as an error, not a silent 30s wait.
-      connection-timeout: 250
+      # Pool exhaustion / unreachable DB must surface fast (and be retried by the error handler), not wait 30s.
+      connection-timeout: 500
       validation-timeout: 250
+      data-source-properties:
+        # Oracle has no session lock_timeout and JDBC setQueryTimeout is whole seconds. A socket read timeout is
+        # the backstop against hung calls (e.g. a primary that died mid-switch). Keep it well above normal latency.
+        "[oracle.jdbc.ReadTimeout]": ${DB_READ_TIMEOUT_MS:5000}
+        "[oracle.net.CONNECT_TIMEOUT]": ${DB_CONNECT_TIMEOUT_MS:2000}
 
   flyway:
     enabled: true
@@ -64,9 +69,7 @@ app:
     replication-factor: ${REPLICATION_FACTOR:1}
   processor:
     concurrency: ${PROCESSOR_CONCURRENCY:6}
-  db:
-    lock-timeout-ms: 300
-    statement-timeout-ms: 500
+    group-id: ${PROCESSOR_GROUP_ID:payment-processor}
   audit:
     enabled: ${AUDIT_ENABLED:false}
 

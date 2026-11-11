@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 /**
- * Benchmark, not a gate: injects a fixed latency on every Postgres round trip (simulating a DB in another
+ * Benchmark, not a gate: injects a fixed latency on every Oracle round trip (simulating a DB in another
  * zone) and reports how much of the per-request time is DB round trips. Use it to compare processor
  * implementations. Knob: -Drr.bench.rttMs=3 -Drr.bench.requests=200
  */
@@ -27,7 +27,7 @@ class ProcessingLatencyIT extends AbstractIntegrationTest {
     @Test
     void reportsDbRoundTripCostPerRequest() throws Exception {
         Timer processing = registry.get("rr.processor.processing").timer();
-        PG_PROXY.toxics().latency("pg-rtt", ToxicDirection.DOWNSTREAM, RTT_MS);
+        DB_PROXY.toxics().latency("db-rtt", ToxicDirection.DOWNSTREAM, RTT_MS);
 
         for (int i = 0; i < 20; i++) {   // warm the toxic path and JIT
             client.submit(newCommand()).get(5, TimeUnit.SECONDS);

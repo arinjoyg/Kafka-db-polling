@@ -38,10 +38,14 @@ public class AuditRepository implements DisposableBean {
         executor.execute(() -> {
             try {
                 jdbc.update("""
-                        INSERT INTO requestor_audit (request_id, payment_id, outcome, latency_ms, instance_id, recorded_at)
-                        VALUES (?, ?, ?, ?, ?, now())
-                        ON CONFLICT (request_id) DO UPDATE
-                           SET outcome = EXCLUDED.outcome, latency_ms = EXCLUDED.latency_ms, recorded_at = now()
+                        MERGE INTO requestor_audit a
+                        USING (SELECT ? AS request_id, ? AS payment_id, ? AS outcome, ? AS latency_ms,
+                                      ? AS instance_id FROM dual) s
+                           ON (a.request_id = s.request_id)
+                        WHEN MATCHED THEN UPDATE
+                             SET a.outcome = s.outcome, a.latency_ms = s.latency_ms, a.recorded_at = SYSTIMESTAMP
+                        WHEN NOT MATCHED THEN INSERT (request_id, payment_id, outcome, latency_ms, instance_id, recorded_at)
+                             VALUES (s.request_id, s.payment_id, s.outcome, s.latency_ms, s.instance_id, SYSTIMESTAMP)
                         """, outcome.requestId(), paymentId, outcome.kind().name(), outcome.latencyMs(),
                         props.instanceId());
             } catch (RuntimeException e) {

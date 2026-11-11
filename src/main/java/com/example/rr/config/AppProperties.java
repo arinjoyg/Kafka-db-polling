@@ -17,15 +17,12 @@ public record AppProperties(
          */
         int replyPartition,
         Processor processor,
-        Db db,
         Audit audit) {
 
     public record Topics(String request, String reply, int requestPartitions, int replyPartitions, int replicationFactor) {}
 
-    public record Processor(int concurrency) {}
-
-    /** Server-side guards so a single slow statement or lock wait can't silently eat the whole SLA. */
-    public record Db(int lockTimeoutMs, int statementTimeoutMs) {}
+    /** @param groupId consumer group of the request listener (configurable so test contexts stay isolated) */
+    public record Processor(int concurrency, String groupId) {}
 
     /** When enabled the requestor records every outcome so timeouts can be reconciled against DB commits. */
     public record Audit(boolean enabled) {}
