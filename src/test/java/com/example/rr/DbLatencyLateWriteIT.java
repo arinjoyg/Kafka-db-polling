@@ -59,7 +59,19 @@ class DbLatencyLateWriteIT extends AbstractIntegrationTest {
             throw new IllegalStateException("query " + tag + " not found in sql/reconcile.sql");
         }
         int bodyStart = all.indexOf('\n', start) + 1;
-        int end = all.indexOf(';', bodyStart);
-        return all.substring(bodyStart, end);
+        // Drop comment lines first: comments may contain ';'.
+        StringBuilder sql = new StringBuilder();
+        for (String line : all.substring(bodyStart).split("\n")) {
+            if (line.stripLeading().startsWith("--")) {
+                continue;
+            }
+            int semi = line.indexOf(';');
+            if (semi >= 0) {
+                sql.append(line, 0, semi);
+                return sql.toString();
+            }
+            sql.append(line).append('\n');
+        }
+        throw new IllegalStateException("query " + tag + " has no terminating ';'");
     }
 }

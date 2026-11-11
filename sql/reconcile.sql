@@ -3,7 +3,7 @@
 -- Each query returns request_id as its first column.
 
 -- name: late_writes
--- Caller was told PENDING (timeout) but the write committed. Expected to be non-zero under chaos;
+-- Caller was told PENDING (timeout) but the write committed. Expected to be non-zero under chaos -
 -- the count must be explained, and the caller-side status-query path must resolve each of these.
 SELECT a.request_id
   FROM requestor_audit a
