@@ -221,7 +221,12 @@ class DbSwitchoverIT {
         awaitPaused();
         SWITCH_PROXY.setUpstream("oracle-shadow:1521");
         post("/admin/db/evict-pool");
-        Map<?, ?> resync = post("/admin/processing/resync");
+        // A connection that was mid-connect when the endpoint flipped can still land on the fenced main
+        // (ORA-28000). Retry until resync reads the shadow, exactly as an operator would.
+        Map<?, ?> resync = await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofSeconds(1))
+                .until(() -> rest.postForEntity("/admin/processing/resync", null, Map.class),
+                        r -> r.getStatusCode().is2xxSuccessful())
+                .getBody();
         System.out.printf("[failover] resync: %s%n", resync);
         post("/admin/processing/resume");
 
