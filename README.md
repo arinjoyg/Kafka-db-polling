@@ -3,7 +3,7 @@
 A reference implementation and test harness for a **synchronous-over-Kafka** flow. A caller sends a request and the processor applies an idempotent **Oracle upsert**. The caller needs an answer within **1000 ms**.
 
 ```
-HTTP caller ──► requestor ──(payments.request, key=paymentId, deadline header)──► processor ──► Postgres upsert
+HTTP caller ──► requestor ──(payments.request, key=paymentId, deadline header)──► processor ──► Oracle upsert
        ▲             │                                                              │
        └──200/202────┴◄──────(payments.reply, own partition, correlation id)────────┘
 ```
