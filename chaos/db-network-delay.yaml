@@ -1,0 +1,26 @@
+# Scenario 7 (DB degradation) – add 300ms ±50ms latency on processor -> Postgres traffic for 2 minutes.
+# Expect: timeouts (202) rise, late writes appear in sql/reconcile.sql, recovery after the window.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: db-network-delay
+  namespace: payments-perf
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [payments-perf]
+    labelSelectors:
+      app: kafka-rr-processor
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces: [payments-perf]
+      labelSelectors:
+        app: postgres
+  delay:
+    latency: "300ms"
+    jitter: "50ms"
+    correlation: "0"
+  duration: "2m"

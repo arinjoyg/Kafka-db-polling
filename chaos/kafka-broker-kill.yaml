@@ -1,0 +1,16 @@
+# Scenario 6 (broker failure) – kill one Kafka broker pod; partitions it led must elect new leaders.
+# Labels below assume a Strimzi cluster named "perf-kafka" (AMQ Streams on OpenShift). Adjust to yours.
+# Pre-req for a meaningful test: replication.factor=3, min.insync.replicas=2, producer acks=all.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: kafka-broker-kill
+  namespace: payments-perf
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [payments-perf]
+    labelSelectors:
+      strimzi.io/cluster: perf-kafka
+      strimzi.io/broker-role: "true"

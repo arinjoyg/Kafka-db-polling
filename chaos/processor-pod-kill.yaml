@@ -1,0 +1,15 @@
+# Scenario 5 (consumer rebalance) – kill one processor pod during load.
+# Requires Chaos Mesh (https://chaos-mesh.org). On OpenShift it needs a privileged SCC for its daemon;
+# if that's not allowed in your cluster, use scripts/chaos-during-load.sh with ACTION=delete-pod instead.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: processor-pod-kill
+  namespace: payments-perf
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [payments-perf]
+    labelSelectors:
+      app: kafka-rr-processor

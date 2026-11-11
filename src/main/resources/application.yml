@@ -1,0 +1,88 @@
+spring:
+  application:
+    name: kafka-rr-sla
+  profiles:
+    # Used only when no profile is set explicitly. In OpenShift run them as separate Deployments:
+    #   SPRING_PROFILES_ACTIVE=requestor   /   SPRING_PROFILES_ACTIVE=processor
+    default: requestor,processor
+  threads:
+    virtual:
+      enabled: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:29092}
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        # Latency over throughput: don't wait to fill batches. (Kafka 4.x clients default linger.ms to 5.)
+        linger.ms: 0
+        # Fail fast instead of the 30s / 120s defaults; a request that can't be sent in ~1s is already dead.
+        request.timeout.ms: 1000
+        delivery.timeout.ms: 1500
+        max.block.ms: 500
+    consumer:
+      enable-auto-commit: false
+      auto-offset-reset: latest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      max-poll-records: 50
+      properties:
+        # Incremental (cooperative) rebalancing: unaffected partitions keep flowing during a rebalance.
+        # On Kafka 4.x brokers+clients, prefer the KIP-848 protocol instead: group.protocol=consumer
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+        fetch.max.wait.ms: 50
+        # Faster failure detection than the 45s default; tune against GC pauses to avoid false evictions.
+        session.timeout.ms: 10000
+        heartbeat.interval.ms: 3000
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/payments}
+    username: ${DB_USER:payments}
+    password: ${DB_PASSWORD:payments}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      # 250ms is HikariCP's minimum. Pool exhaustion must surface as an error, not a silent 30s wait.
+      connection-timeout: 250
+      validation-timeout: 250
+
+  flyway:
+    enabled: true
+
+app:
+  instance-id: ${INSTANCE_ID:${HOSTNAME:local}}
+  sla-ms: 1000
+  reply-timeout-ms: ${REPLY_TIMEOUT_MS:900}
+  reply-partition: ${REPLY_PARTITION:0}
+  topics:
+    request: payments.request
+    reply: payments.reply
+    request-partitions: 12
+    reply-partitions: 6
+    replication-factor: ${REPLICATION_FACTOR:1}
+  processor:
+    concurrency: ${PROCESSOR_CONCURRENCY:6}
+  db:
+    lock-timeout-ms: 300
+    statement-timeout-ms: 500
+  audit:
+    enabled: ${AUDIT_ENABLED:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5,0.95,0.99,0.999
+
+logging:
+  level:
+    # Late replies (arriving after timeout) are logged by the template at WARN – useful signal under load.
+    org.springframework.kafka.requestreply: WARN
