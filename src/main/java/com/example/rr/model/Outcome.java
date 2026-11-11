@@ -6,7 +6,7 @@ public record Outcome(String requestId, Kind kind, PaymentReply reply, long late
     public enum Kind {
         /** Reply received within the timeout; write committed. */
         OK,
-        /** Reply received; this requestId had already been applied (no second write). */
+        /** Rejected: this requestId had already been processed (no second write). See reply.originalStatus. */
         DUPLICATE,
         /**
          * No reply within the timeout. The write MAY still commit later ("late write"), or may have been

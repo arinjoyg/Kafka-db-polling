@@ -14,7 +14,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 200 = committed (OK or DUPLICATE)
+ * 200 = committed
+ * 409 = REJECTED_DUPLICATE: requestId already processed; body.reply.originalStatus says how the original ended
  * 202 = PENDING: no reply within the budget; the write may still land. Never report this as a failure.
  * 503 = send failed, or intake closed for a DB switchover (with Retry-After)
  */
@@ -44,7 +45,9 @@ public class PaymentController {
                 ? body.withRequestId(UUID.randomUUID().toString())
                 : body;
         return client.submit(cmd).thenApply(o -> switch (o.kind()) {
-            case OK, DUPLICATE -> ResponseEntity.ok(o);
+            case OK -> ResponseEntity.ok(o);
+            // Same requestId already processed: reject, but the body carries the original outcome.
+            case DUPLICATE -> ResponseEntity.status(HttpStatus.CONFLICT).body(o);
             case TIMEOUT -> ResponseEntity.accepted().body(o);
             case ERROR -> ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(o);
         });

@@ -1,5 +1,6 @@
 package com.example.rr.processor;
 
+import com.example.rr.config.AppProperties;
 import com.example.rr.config.RrHeaders;
 import com.example.rr.model.PaymentCommand;
 import com.example.rr.model.PaymentReply;
@@ -9,16 +10,22 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.listener.AbstractConsumerSeekAware;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.messaging.Message;
 import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -33,14 +40,16 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
     private final ObjectMapper mapper;
     private final ReplayWindow replayWindow;
     private final OffsetResync offsetResync;
+    private final AppProperties props;
     private final Counter expired;
     private final Counter replayed;
     private final Timer queueDelay;
     private final Timer processing;
 
     public PaymentRequestListener(PaymentService service, ObjectMapper mapper, ReplayWindow replayWindow,
-                                  OffsetResync offsetResync, MeterRegistry registry) {
+                                  OffsetResync offsetResync, AppProperties props, MeterRegistry registry) {
         this.service = service;
+        this.props = props;
         this.mapper = mapper;
         this.replayWindow = replayWindow;
         this.offsetResync = offsetResync;
@@ -60,12 +69,13 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
 
     /**
      * {@code id} is used for registry lookups (pause/resume); the consumer group comes from config so test
-     * contexts can be isolated. {@code @SendTo} replies to REPLY_TOPIC/REPLY_PARTITION; null = no reply.
+     * contexts can be isolated. Returns the response as a Message so routing works for any caller (see
+     * {@link #respond}); null = no response.
      */
     @KafkaListener(id = LISTENER_ID, groupId = "${app.processor.group-id}",
             topics = "${app.topics.request}", containerFactory = "processorFactory")
     @SendTo
-    public String onRequest(ConsumerRecord<String, String> record) throws JsonProcessingException {
+    public Message<String> onRequest(ConsumerRecord<String, String> record) throws JsonProcessingException {
         long now = System.currentTimeMillis();
         queueDelay.record(Math.max(0, now - record.timestamp()), TimeUnit.MILLISECONDS);
 
@@ -95,7 +105,36 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
         } finally {
             processing.record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
         }
-        return mapper.writeValueAsString(reply);
+        return respond(record, reply);
+    }
+
+    /**
+     * Response routing that works for both kinds of caller:
+     * <ul>
+     *   <li>Callers that send REPLY_TOPIC / REPLY_PARTITION headers (Spring ReplyingKafkaTemplate) get them honoured.</li>
+     *   <li>Callers that just produce to the request topic and poll the response topic get it on
+     *       {@code app.topics.reply}.</li>
+     * </ul>
+     * The key is the requestId in both cases, so a caller can match ANY attempt's response (including a late
+     * response to an attempt it already gave up on) by requestId, not only by per-attempt correlation id.
+     */
+    private Message<String> respond(ConsumerRecord<String, String> request, PaymentReply reply)
+            throws JsonProcessingException {
+        Header replyTopic = request.headers().lastHeader(KafkaHeaders.REPLY_TOPIC);
+        MessageBuilder<String> response = MessageBuilder.withPayload(mapper.writeValueAsString(reply))
+                .setHeader(KafkaHeaders.TOPIC, replyTopic != null
+                        ? new String(replyTopic.value(), StandardCharsets.UTF_8)
+                        : props.topics().reply())
+                .setHeader(KafkaHeaders.KEY, reply.requestId());
+        Header replyPartition = request.headers().lastHeader(KafkaHeaders.REPLY_PARTITION);
+        if (replyPartition != null) {
+            response.setHeader(KafkaHeaders.PARTITION, ByteBuffer.wrap(replyPartition.value()).getInt());
+        }
+        Header correlation = request.headers().lastHeader(KafkaHeaders.CORRELATION_ID);
+        if (correlation != null) {
+            response.setHeader(KafkaHeaders.CORRELATION_ID, correlation.value());
+        }
+        return response.build();
     }
 
     @Override

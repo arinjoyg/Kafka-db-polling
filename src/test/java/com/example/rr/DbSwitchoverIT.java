@@ -414,9 +414,10 @@ class DbSwitchoverIT {
                     (rs, n) -> new Object[] {rs.getString(1), rs.getBigDecimal(2), rs.getString(3), rs.getString(4),
                             rs.getLong(5), rs.getString(6), rs.getTimestamp(7)});
             List<Object[]> ledger = main.query(
-                    "SELECT request_id, payment_id, result_version, processed_at FROM "
-                            + APP_USER + ".processed_requests" + asOf,
-                    (rs, n) -> new Object[] {rs.getString(1), rs.getString(2), rs.getLong(3), rs.getTimestamp(4)});
+                    "SELECT request_id, payment_id, result_version, processed_at, source_topic, source_partition, "
+                            + "source_offset FROM " + APP_USER + ".processed_requests" + asOf,
+                    (rs, n) -> new Object[] {rs.getString(1), rs.getString(2), rs.getLong(3), rs.getTimestamp(4),
+                            rs.getString(5), rs.getInt(6), rs.getLong(7)});
             List<Object[]> offsets = main.query(
                     "SELECT topic, partition_id, next_offset, updated_at FROM " + APP_USER + ".consumer_offsets" + asOf,
                     (rs, n) -> new Object[] {rs.getString(1), rs.getInt(2), rs.getLong(3), rs.getTimestamp(4)});
@@ -431,7 +432,8 @@ class DbSwitchoverIT {
                 }
                 if (!ledger.isEmpty()) {
                     shadow.batchUpdate("INSERT INTO processed_requests (request_id, payment_id, result_version, "
-                            + "processed_at) VALUES (?, ?, ?, ?)", ledger);
+                            + "processed_at, source_topic, source_partition, source_offset) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            ledger);
                 }
                 if (!offsets.isEmpty()) {
                     shadow.batchUpdate("INSERT INTO consumer_offsets (topic, partition_id, next_offset, updated_at) "
