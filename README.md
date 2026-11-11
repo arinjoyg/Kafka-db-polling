@@ -38,7 +38,7 @@ sql/reconcile.sql             late_writes, unresolved_timeouts, ok_without_write
 sql/switchover-check.sql      Run on main and shadow before repointing; output must match
 docs/db-switchover.md         GoldenGate switchover / failover runbook
 scripts/db-switchover.sh      Orchestrates the app-side switchover steps across pods
-docs/test-plan.md             Scenario matrix (14 scenarios) with pass criteria and run rules
+docs/test-plan.md             Scenario matrix (15 scenarios) with pass criteria and run rules
 ```
 
 ## Running it

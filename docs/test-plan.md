@@ -33,7 +33,7 @@ Calculate latency only on one host's clock (the client's). Don't subtract timest
 | 11 | Payload size variance | `k6 MAX_PADDING=200000` | p99 within SLA up to the agreed max size. Nothing rejected under `max.message.bytes`. |
 | 12 | Duplicate injection | `IdempotencyIT`; `k6 DUP_FRACTION=0.05` | `version_drift` = 0. Duplicates answered as DUPLICATE with the original version. |
 | 13 | Timeout reconciliation | `sql/reconcile.sql` after every run | `ok_without_write` = 0. `unresolved_timeouts` = `rr.processor.expired`. Late writes explained. |
-| 15 | DB switchover (main → shadow, GoldenGate) | `DbSwitchoverIT`; perf env: `scripts/db-switchover.sh planned|failover` | Every caller told OK has the write on the shadow. `version_drift` = 0. Planned run: no replay needed. Unplanned run: the lag window is replayed. |
+| 15 | DB switchover (main → shadow, GoldenGate) | `DbSwitchoverIT`; perf env: `scripts/db-switchover.sh planned` or `failover` | Every caller told OK has the write on the shadow. `version_drift` = 0. Planned run: no replay needed. Unplanned run: the lag window is replayed. |
 | 14 | Backlog / cold start | `ExpiredRequestIT`; stop processors 5 min under load, then restart | Expired requests dropped, not written. Fresh requests meet the SLA once the backlog of expired ones is skipped. |
 
 ## Rules of the run
