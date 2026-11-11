@@ -19,6 +19,10 @@ jobs:
           java-version: '21'
           cache: maven
 
+      # Docker Engine 29+ rejects API < 1.40; Testcontainers 1.21.x's docker-java defaults to 1.32.
+      - name: Pin Docker API version for Testcontainers
+        run: echo "api.version=1.44" > ~/.docker-java.properties
+
       # Unit + integration tests. ITs use Testcontainers (Kafka KRaft, Postgres, Toxiproxy) on the runner's Docker.
       - name: mvn verify
         run: mvn -B -ntp verify

@@ -38,7 +38,8 @@ docs/test-plan.md             Scenario matrix (14 scenarios) with pass criteria 
 
 ## Running it
 
-**Integration tests** (needs Docker):
+**Integration tests** (needs Docker). On Docker Engine 29+, first run
+`echo "api.version=1.44" > ~/.docker-java.properties` (Testcontainers 1.21.x otherwise sends an API version Docker rejects).
 ```bash
 mvn verify
 # rebalance test knobs
