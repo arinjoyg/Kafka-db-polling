@@ -1,4 +1,4 @@
-# Local stack: KRaft Kafka, Postgres, 2 processor replicas, 1 requestor on :8080.
+# Local stack: KRaft Kafka, Oracle 23ai Free, 2 processor replicas, 1 requestor on :8080.
 #   mvn -DskipTests package && docker compose up --build
 #   k6 run -e SCENARIO=baseline -e RATE=100 -e DURATION=2m k6/scenarios.js
 # Local numbers are for smoke-testing the harness only – never for sign-off.
@@ -24,17 +24,17 @@ services:
       interval: 5s
       retries: 20
 
-  postgres:
-    image: postgres:16-alpine
-    ports: ["5432:5432"]
+  oracle:
+    image: gvenzl/oracle-free:23-slim-faststart
+    ports: ["1521:1521"]
     environment:
-      POSTGRES_DB: payments
-      POSTGRES_USER: payments
-      POSTGRES_PASSWORD: payments
+      ORACLE_PASSWORD: oracle
+      APP_USER: payments
+      APP_USER_PASSWORD: payments
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U payments"]
-      interval: 3s
-      retries: 20
+      test: ["CMD", "healthcheck.sh"]
+      interval: 5s
+      retries: 60
 
   processor:
     build: .
@@ -43,11 +43,11 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: processor
       KAFKA_BOOTSTRAP: kafka:9092
-      DB_URL: jdbc:postgresql://postgres:5432/payments
+      DB_URL: jdbc:oracle:thin:@oracle:1521/FREEPDB1
       SERVER_PORT: "8081"
     depends_on:
       kafka: { condition: service_healthy }
-      postgres: { condition: service_healthy }
+      oracle: { condition: service_healthy }
 
   requestor:
     build: .
@@ -55,10 +55,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: requestor
       KAFKA_BOOTSTRAP: kafka:9092
-      DB_URL: jdbc:postgresql://postgres:5432/payments
+      DB_URL: jdbc:oracle:thin:@oracle:1521/FREEPDB1
       INSTANCE_ID: requestor-0
       REPLY_PARTITION: "0"
       AUDIT_ENABLED: "true"
     depends_on:
       kafka: { condition: service_healthy }
-      postgres: { condition: service_healthy }
+      oracle: { condition: service_healthy }
