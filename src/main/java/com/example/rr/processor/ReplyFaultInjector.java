@@ -53,8 +53,10 @@ public class ReplyFaultInjector {
         return fired.get();
     }
 
-    void afterReplySent(String requestId) {
+    /** Flushes first, so the response is really on the broker before the "crash": the worst case, deterministically. */
+    void afterReplySent(String requestId, Runnable flush) {
         if (armed.remove(requestId)) {
+            flush.run();
             fired.incrementAndGet();
             throw new InjectedFault("injected crash after reply sent, before commit: " + requestId);
         }

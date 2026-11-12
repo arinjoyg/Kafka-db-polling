@@ -125,7 +125,7 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
         }
         faults.beforeReplySent(reply.requestId());
         replyTemplate.send(respond(record, reply));
-        faults.afterReplySent(reply.requestId());
+        faults.afterReplySent(reply.requestId(), replyTemplate::flush);
     }
 
     /**
