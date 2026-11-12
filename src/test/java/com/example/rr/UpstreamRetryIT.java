@@ -20,15 +20,18 @@ import org.springframework.kafka.core.KafkaTemplate;
 
 /**
  * Emulates the real upstream service: it produces to the request topic with NO reply headers, polls the response
- * topic for 30ms, and on timeout sends the SAME request (same requestId) again.
+ * topic for 300ms (-Drr.upstream.timeoutMs), and on timeout sends the SAME request (same requestId) again.
  *
- * DB latency is injected so the first attempt takes longer than 30ms. Expected: exactly one write, and two
+ * DB latency is injected per round trip so the first attempt (2 DB round trips) takes longer than the timeout. Expected: exactly one write, and two
  * responses for the requestId: ACCEPTED (late, for attempt 1) and REJECTED_DUPLICATE carrying
  * originalStatus=ACCEPTED (for attempt 2).
  */
 class UpstreamRetryIT extends AbstractIntegrationTest {
 
-    private static final Duration UPSTREAM_TIMEOUT = Duration.ofMillis(30);
+    private static final Duration UPSTREAM_TIMEOUT = Duration.ofMillis(Long.getLong("rr.upstream.timeoutMs", 300));
+
+    /** Per DB round trip; attempt 1 needs 2 round trips, so it lands well past the upstream timeout. */
+    private static final int DB_LATENCY_MS = (int) (UPSTREAM_TIMEOUT.toMillis() / 2 + 50);
 
     @Autowired
     KafkaTemplate<String, String> kafka;
@@ -43,8 +46,8 @@ class UpstreamRetryIT extends AbstractIntegrationTest {
     ObjectMapper mapper;
 
     @Test
-    void retryAfter30msTimeoutIsRejectedAsDuplicateWithOriginalOutcome() throws Exception {
-        DB_PROXY.toxics().latency("slow-db", ToxicDirection.DOWNSTREAM, 50);   // attempt 1 takes ~100ms+
+    void retryAfterUpstreamTimeoutIsRejectedAsDuplicateWithOriginalOutcome() throws Exception {
+        DB_PROXY.toxics().latency("slow-db", ToxicDirection.DOWNSTREAM, DB_LATENCY_MS);
 
         try (Consumer<String, String> responses = consumerFactory.createConsumer("upstream-sim", "upstream-sim")) {
             List<TopicPartition> partitions = responses.partitionsFor(props.topics().reply()).stream()
@@ -59,7 +62,7 @@ class UpstreamRetryIT extends AbstractIntegrationTest {
             // Attempt 1, exactly as the upstream sends it: no reply headers, key = paymentId.
             kafka.send(props.topics().request(), cmd.paymentId(), json).get();
             List<PaymentReply> got = pollFor(responses, cmd.requestId(), 1, UPSTREAM_TIMEOUT);
-            assertThat(got).as("no response within the upstream's 30ms timeout").isEmpty();
+            assertThat(got).as("no response within the upstream's %dms timeout", UPSTREAM_TIMEOUT.toMillis()).isEmpty();
 
             // Attempt 2: the upstream times out and re-sends the SAME request.
             kafka.send(props.topics().request(), cmd.paymentId(), json).get();
