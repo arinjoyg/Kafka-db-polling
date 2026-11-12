@@ -24,6 +24,9 @@ spring:
         delivery.timeout.ms: 1500
         max.block.ms: 500
     consumer:
+      # Responses are written in Kafka transactions; never read an aborted (duplicate) response.
+      # The upstream service's response consumer MUST set isolation.level=read_committed too.
+      isolation-level: read-committed
       enable-auto-commit: false
       auto-offset-reset: latest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer

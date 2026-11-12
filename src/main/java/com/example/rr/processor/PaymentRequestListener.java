@@ -1,6 +1,7 @@
 package com.example.rr.processor;
 
 import com.example.rr.config.AppProperties;
+import com.example.rr.config.ProcessorKafkaConfig;
 import com.example.rr.config.RrHeaders;
 import com.example.rr.model.PaymentCommand;
 import com.example.rr.model.PaymentReply;
@@ -19,12 +20,13 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Profile;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.AbstractConsumerSeekAware;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
-import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Component;
 
@@ -41,15 +43,21 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
     private final ReplayWindow replayWindow;
     private final OffsetResync offsetResync;
     private final AppProperties props;
+    private final KafkaTemplate<String, String> replyTemplate;
+    private final ReplyFaultInjector faults;
     private final Counter expired;
     private final Counter replayed;
     private final Timer queueDelay;
     private final Timer processing;
 
     public PaymentRequestListener(PaymentService service, ObjectMapper mapper, ReplayWindow replayWindow,
-                                  OffsetResync offsetResync, AppProperties props, MeterRegistry registry) {
+                                  OffsetResync offsetResync, AppProperties props,
+                                  @Qualifier(ProcessorKafkaConfig.REPLY_TEMPLATE) KafkaTemplate<String, String> replyTemplate,
+                                  ReplyFaultInjector faults, MeterRegistry registry) {
         this.service = service;
         this.props = props;
+        this.replyTemplate = replyTemplate;
+        this.faults = faults;
         this.mapper = mapper;
         this.replayWindow = replayWindow;
         this.offsetResync = offsetResync;
@@ -57,7 +65,7 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
                 .description("Requests dropped because their deadline had passed before processing")
                 .register(registry);
         this.replayed = Counter.builder("rr.processor.replayed")
-                .description("Records re-applied inside a replay window after the DB was found behind Kafka")
+                .description("Records re-applied SILENTLY (no response) inside a replay window after a DB switch")
                 .register(registry);
         this.queueDelay = Timer.builder("rr.processor.queue.delay")
                 .publishPercentiles(0.5, 0.99, 0.999).publishPercentileHistogram()
@@ -68,14 +76,20 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
     }
 
     /**
-     * {@code id} is used for registry lookups (pause/resume); the consumer group comes from config so test
-     * contexts can be isolated. Returns the response as a Message so routing works for any caller (see
-     * {@link #respond}); null = no response.
+     * Runs inside a Kafka transaction (one per record) that also carries this record's consumer offset.
+     * Exactly one VISIBLE response per request record:
+     * <ul>
+     *   <li>normal: DB commit, then response sent in the Kafka transaction, then commit (response + offset);</li>
+     *   <li>crash after send, before commit: the transaction aborts, the response is invisible to read_committed
+     *       consumers, the record is redelivered, the ledger says REDELIVERY, and the response is sent once more;</li>
+     *   <li>replay after a DB switch: the write is re-applied silently, with NO response. The old database already
+     *       answered (or the caller timed out long ago and will retry); a second answer would be a duplicate.</li>
+     * </ul>
+     * {@code id} is used for registry lookups (pause/resume); the group comes from config so test contexts stay isolated.
      */
     @KafkaListener(id = LISTENER_ID, groupId = "${app.processor.group-id}",
             topics = "${app.topics.request}", containerFactory = "processorFactory")
-    @SendTo
-    public Message<String> onRequest(ConsumerRecord<String, String> record) throws JsonProcessingException {
+    public void onRequest(ConsumerRecord<String, String> record) throws JsonProcessingException {
         long now = System.currentTimeMillis();
         queueDelay.record(Math.max(0, now - record.timestamp()), TimeUnit.MILLISECONDS);
 
@@ -90,14 +104,18 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
             expired.increment();
             service.recordDropped(pos);
             log.debug("Dropping expired request {} late-by={}ms", pos, now - deadline);
-            return null;
-        }
-        if (replay) {
-            replayed.increment();
+            return;
         }
 
         PaymentCommand cmd = mapper.readValue(record.value(), PaymentCommand.class);
         cmd.validate();
+
+        if (replay) {
+            service.process(cmd, pos);   // restore the data on this DB; no response
+            replayed.increment();
+            return;
+        }
+
         long start = System.nanoTime();
         PaymentReply reply;
         try {
@@ -105,7 +123,8 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
         } finally {
             processing.record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
         }
-        return respond(record, reply);
+        replyTemplate.send(respond(record, reply));
+        faults.afterReplySent(reply.requestId());
     }
 
     /**

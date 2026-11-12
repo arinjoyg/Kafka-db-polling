@@ -41,6 +41,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.http.HttpStatus;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Header;
+import java.util.HexFormat;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -120,6 +127,11 @@ class DbSwitchoverIT {
     @Autowired
     MeterRegistry meters;
 
+    @Autowired
+    ConsumerFactory<String, String> consumerFactory;
+
+    private ResponseRecorder responses;
+
     private final JdbcTemplate mainSys = new JdbcTemplate(
             new DriverManagerDataSource(ORACLE.getJdbcUrl(), "system", ORACLE_PASSWORD));
     private final JdbcTemplate shadowApp = new JdbcTemplate(
@@ -149,11 +161,27 @@ class DbSwitchoverIT {
         if (replicator != null) {
             replicator.stop();
         }
+        if (responses != null) {
+            responses.close();
+        }
+    }
+
+    /**
+     * Reads the response topic as the caller would (read_committed) and asserts that no request attempt
+     * (correlation id) ever received more than one response, across the whole switch.
+     */
+    private void assertAtMostOneResponsePerAttempt(String label) {
+        Map<String, Integer> perAttempt = responses.drain();
+        long duplicated = perAttempt.values().stream().filter(n -> n > 1).count();
+        System.out.printf("[%s] responses=%d attempts-with-duplicate-responses=%d%n",
+                label, perAttempt.values().stream().mapToInt(Integer::intValue).sum(), duplicated);
+        assertThat(duplicated).as("request attempts that received more than one response").isZero();
     }
 
     /** Runbook: intake closed -> pause -> fence -> wait for replication to drain -> repoint -> resume. */
     @Test
     void plannedSwitchoverLosesNothingAndAppliesNothingTwice() throws Exception {
+        responses = new ResponseRecorder(consumerFactory, "switch.reply");
         double replayedBefore = replayed();
         replicator = new SnapshotReplicator(Duration.ofMillis(500));
         replicator.start();
@@ -197,6 +225,7 @@ class DbSwitchoverIT {
                 .as("no request applied twice").isEmpty();
         assertThat(errors(beforeOutcomes, afterOutcomes)).isZero();
         assertThat(replayed() - replayedBefore).as("zero lag at switch => nothing to replay").isZero();
+        assertAtMostOneResponsePerAttempt("planned");
     }
 
     /**
@@ -205,6 +234,7 @@ class DbSwitchoverIT {
      */
     @Test
     void unplannedFailoverReplaysWritesLostInReplicationLag() throws Exception {
+        responses = new ResponseRecorder(consumerFactory, "switch.reply");
         double replayedBefore = replayed();
         replicator = new SnapshotReplicator(Duration.ofSeconds(2));
         replicator.start();
@@ -241,6 +271,7 @@ class DbSwitchoverIT {
                 .as("no request applied twice").isEmpty();
         assertThat(errors(outcomes)).isZero();
         assertThat(replayed() - replayedBefore).as("records lost in the lag window were replayed").isPositive();
+        assertAtMostOneResponsePerAttempt("unplanned");
     }
 
     // ---------------------------------------------------------------- helpers
@@ -318,6 +349,42 @@ class DbSwitchoverIT {
             run.forEach(o -> counts.merge(o.kind(), 1, Integer::sum));
         }
         System.out.printf("%n[%s] outcomes=%s%n%n", label, counts);
+    }
+
+    /** Caller's view of the response topic: counts read_committed responses per correlation id (= per attempt). */
+    static final class ResponseRecorder implements AutoCloseable {
+        private final Consumer<String, String> consumer;
+
+        ResponseRecorder(ConsumerFactory<String, String> factory, String topic) {
+            consumer = factory.createConsumer("switch-response-recorder", "recorder");
+            List<TopicPartition> partitions = consumer.partitionsFor(topic).stream()
+                    .map(p -> new TopicPartition(p.topic(), p.partition())).toList();
+            consumer.assign(partitions);
+            consumer.seekToEnd(partitions);
+            partitions.forEach(consumer::position);
+        }
+
+        Map<String, Integer> drain() {
+            Map<String, Integer> perAttempt = new HashMap<>();
+            long quietSince = System.nanoTime();
+            while (System.nanoTime() - quietSince < TimeUnit.SECONDS.toNanos(3)) {
+                var batch = consumer.poll(Duration.ofMillis(200));
+                if (!batch.isEmpty()) {
+                    quietSince = System.nanoTime();
+                }
+                for (ConsumerRecord<String, String> r : batch) {
+                    Header corr = r.headers().lastHeader(KafkaHeaders.CORRELATION_ID);
+                    String key = corr != null ? HexFormat.of().formatHex(corr.value()) : "key:" + r.key();
+                    perAttempt.merge(key, 1, Integer::sum);
+                }
+            }
+            return perAttempt;
+        }
+
+        @Override
+        public void close() {
+            consumer.close();
+        }
     }
 
     /** Fixed-arrival-rate load through the requestor's ReplyClient (open model). */
