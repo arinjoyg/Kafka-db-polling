@@ -132,6 +132,9 @@ class ZombieConsumerIT extends AbstractIntegrationTest {
                         "--app.processor.group-id=zombie-processor",
                         "--app.processor.concurrency=1",
                         "--spring.kafka.consumer.properties[max.poll.interval.ms]=4000",
+                        // Fresh topic: "latest" is resolved lazily per partition and can skip a record sent just
+                        // after assignment. Earliest is exact here (the topic only holds this test's records).
+                        "--spring.kafka.consumer.auto-offset-reset=earliest",
                         "--spring.flyway.enabled=false",
                         "--spring.kafka.bootstrap-servers=" + KAFKA.getBootstrapServers(),
                         "--spring.datasource.url=" + jdbcUrlViaProxy(),
