@@ -16,6 +16,7 @@ HTTP caller ──► requestor ──(payments.request, key=paymentId, deadline
 | Multiple requestor pods | Each pod is **pinned to its own reply partition** (`REPLY_PARTITION`, e.g. StatefulSet ordinal). There are no rebalances on the reply side and no cross-talk. |
 | Exactly-once *effect* | At-least-once delivery + `processed_requests` PK on `requestId`. One PL/SQL block (ledger claim, `MERGE` payment, consumer offset) = 1 round trip + commit. The DB commits before the reply is sent, so a reply always means a durable write. |
 | DB switchover / failover | Consumer offsets stored **in the DB, in the same transaction**. After a switch, consumers resume from what the new DB actually has; the ledger skips what it already has. Runbook: [docs/db-switchover.md](docs/db-switchover.md). |
+| One response per attempt | Response + consumer offset in **one Kafka transaction** per record (`read_committed` consumers). Replays after a DB switch re-apply silently, with no response. |
 | DB outage | The error handler **never skips** on DB-unavailable errors (capped backoff, retries forever). Bad records go to `<topic>.DLT`. |
 | Not wasting work | An absolute **deadline header** is set. The processor drops expired requests and doesn't write them. |
 | Timeout semantics | 202 PENDING, **not** failure. The write may still land ("late write"). `sql/reconcile.sql` finds these. |

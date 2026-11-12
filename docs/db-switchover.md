@@ -12,6 +12,18 @@ The target is **zero lost writes and zero double-applied writes**, whether the s
 | Replay window | Records that existed in Kafka before the resync are re-applied even if past their deadline, because the old DB may already have answered them OK. |
 | Error handler never skips on DB-unavailable errors | During the outage, records wait with backoff. Before this change they were skipped after about 100 ms, and processed in neither DB. |
 
+## One response per request attempt
+
+| Situation | What the caller sees |
+|---|---|
+| Normal | One response, committed in the same Kafka transaction as the consumer offset |
+| Processor crash after sending, before commit | The first response is aborted (invisible to `read_committed`); the redelivered record sends the only visible one |
+| Replay after a DB switch | **No response.** The write is restored silently. The old DB already answered, or the caller timed out long ago and retries. A retry arriving after resume gets `REJECTED_DUPLICATE` with `originalStatus`, or `ACCEPTED` if the original never landed. |
+
+**The upstream consumer of the response topic MUST set `isolation.level=read_committed`.** Otherwise it also sees aborted responses.
+
+Proven by `CrashBeforeCommitIT` (2 responses physically on the topic, 1 visible) and `DbSwitchoverIT` (0 attempts with more than one response, planned and unplanned).
+
 ## GoldenGate prerequisites (verify before the first switch)
 
 - [ ] `PAYMENTS`, `PROCESSED_REQUESTS` and `CONSUMER_OFFSETS` are in the **same Extract → trail → Replicat path**, with no filters on any of them.
