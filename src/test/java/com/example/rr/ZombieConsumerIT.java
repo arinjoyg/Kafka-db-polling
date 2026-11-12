@@ -27,13 +27,15 @@ import org.springframework.kafka.core.KafkaTemplate;
  * sending the response, longer than max.poll.interval.ms. The group evicts A and gives the partition to B.
  * B processes the same record (ledger: REDELIVERY) and responds. A then wakes up and sends its response too.
  *
- * Expected: two responses physically on the topic, but A's transaction carries a stale group generation and is
- * rejected by the broker (KIP-447), so the caller (read_committed) sees exactly one. One DB write.
+ * Expected: A's transaction carries a stale group generation and is rejected (KIP-447). Depending on timing A's
+ * response is either written and then aborted, or failed client-side before it is written; either way the caller
+ * (read_committed) sees exactly ONE response, B's. One DB write.
  */
 class ZombieConsumerIT extends AbstractIntegrationTest {
 
     private static final String REQUEST_TOPIC = "zombie.request";
     private static final String REPLY_TOPIC = "zombie.reply";
+    private static final Duration STALL = Duration.ofSeconds(12);
 
     @Autowired
     KafkaTemplate<String, String> kafka;
@@ -66,32 +68,34 @@ class ZombieConsumerIT extends AbstractIntegrationTest {
 
             PaymentCommand cmd = newCommand();
             ReplyFaultInjector aFaults = a.getBean(ReplyFaultInjector.class);
-            aFaults.stallOnceBeforeReply(cmd.requestId(), Duration.ofSeconds(12));   // >> max.poll.interval.ms (4s)
+            aFaults.stallOnceBeforeReply(cmd.requestId(), STALL);   // >> max.poll.interval.ms (4s)
             kafka.send(REQUEST_TOPIC, cmd.paymentId(), mapper.writeValueAsString(cmd)).get();
 
             // A has written to the DB and is now stuck before responding.
             await().atMost(Duration.ofSeconds(30)).until(() -> aFaults.stallsStarted() == 1);
+            long aWakesAt = System.nanoTime() + STALL.toNanos();
 
             // B joins; A can't take part in the rebalance, gets evicted, and B takes over A's partitions.
             b = startProcessor("it-zombie-b");
 
-            long[] counts = new long[2];   // [visible, physical]
+            long[] counts = new long[2];   // [visible to read_committed, physically on the topic]
+            // B takes over and answers...
             await().atMost(Duration.ofSeconds(45)).pollInterval(Duration.ofMillis(200)).until(() -> {
                 counts[0] += count(committedView, cmd.requestId());
                 counts[1] += count(rawView, cmd.requestId());
-                return counts[1] >= 2;
+                return counts[0] >= 1;
             });
-            // Let any straggler arrive.
-            long settleUntil = System.nanoTime() + Duration.ofSeconds(3).toNanos();
-            while (System.nanoTime() < settleUntil) {
+            // ...then A wakes up and tries to send and commit its own response. Keep watching well past that.
+            long watchUntil = aWakesAt + Duration.ofSeconds(5).toNanos();
+            while (System.nanoTime() < watchUntil) {
                 counts[0] += count(committedView, cmd.requestId());
                 counts[1] += count(rawView, cmd.requestId());
             }
             System.out.printf("%n[zombie] responses on topic=%d (incl. aborted), visible to read_committed=%d%n%n",
                     counts[1], counts[0]);
 
-            assertThat(counts[1]).as("both A (zombie) and B sent a response").isEqualTo(2);
-            assertThat(counts[0]).as("caller sees exactly one: A's commit was fenced").isEqualTo(1);
+            assertThat(counts[0]).as("caller sees exactly one response: A's commit was fenced").isEqualTo(1);
+            assertThat(counts[1]).as("A's response, if written at all, was aborted").isBetween(1L, 2L);
             assertThat(jdbc.queryForObject("SELECT version FROM payments WHERE payment_id = ?", Long.class,
                     cmd.paymentId())).as("applied exactly once").isEqualTo(1L);
         } finally {
