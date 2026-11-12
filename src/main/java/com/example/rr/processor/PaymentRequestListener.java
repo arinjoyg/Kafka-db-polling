@@ -123,6 +123,7 @@ public class PaymentRequestListener extends AbstractConsumerSeekAware {
         } finally {
             processing.record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
         }
+        faults.beforeReplySent(reply.requestId());
         replyTemplate.send(respond(record, reply));
         faults.afterReplySent(reply.requestId());
     }

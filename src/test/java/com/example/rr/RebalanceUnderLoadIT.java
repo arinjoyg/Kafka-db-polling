@@ -13,7 +13,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.HexFormat;
 import org.HdrHistogram.Histogram;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Header;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.support.KafkaHeaders;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -34,8 +44,18 @@ class RebalanceUnderLoadIT extends AbstractIntegrationTest {
     private static final double MAX_TIMEOUT_RATE =
             Double.parseDouble(System.getProperty("rr.rebalance.maxTimeoutRate", "0.10"));
 
+    @Autowired
+    ConsumerFactory<String, String> consumerFactory;
+
     @Test
     void scaleOutAndInDuringLoadLosesNothing() throws Exception {
+        // Caller's view of its reply partition (read_committed), to count responses per request attempt.
+        TopicPartition replyPartition = new TopicPartition(appProperties.topics().reply(), appProperties.replyPartition());
+        Consumer<String, String> responses = consumerFactory.createConsumer("rebalance-recorder", "recorder");
+        responses.assign(List.of(replyPartition));
+        responses.seekToEnd(List.of(replyPartition));
+        responses.position(replyPartition);
+
         List<CompletableFuture<Outcome>> futures = Collections.synchronizedList(new ArrayList<>());
         Histogram latencyMs = new Histogram(60_000, 3);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -87,6 +107,27 @@ class RebalanceUnderLoadIT extends AbstractIntegrationTest {
             assertThat(processedCount(id)).as("OK reply implies committed write for " + id).isEqualTo(1L);
         }
         assertThat(timeoutRate).as("timeout rate during scale-out/in").isLessThanOrEqualTo(MAX_TIMEOUT_RATE);
+
+        Map<String, Integer> perAttempt = new HashMap<>();
+        long quietSince = System.nanoTime();
+        try (responses) {
+            while (System.nanoTime() - quietSince < TimeUnit.SECONDS.toNanos(3)) {
+                var batch = responses.poll(Duration.ofMillis(200));
+                if (!batch.isEmpty()) {
+                    quietSince = System.nanoTime();
+                }
+                for (ConsumerRecord<String, String> r : batch) {
+                    Header corr = r.headers().lastHeader(KafkaHeaders.CORRELATION_ID);
+                    if (corr != null) {
+                        perAttempt.merge(HexFormat.of().formatHex(corr.value()), 1, Integer::sum);
+                    }
+                }
+            }
+        }
+        long duplicated = perAttempt.values().stream().filter(n -> n > 1).count();
+        System.out.printf("[rebalance] responses=%d attempts-with-duplicate-responses=%d%n",
+                perAttempt.values().stream().mapToInt(Integer::intValue).sum(), duplicated);
+        assertThat(duplicated).as("request attempts that received more than one response").isZero();
     }
 
     /** A second processor-only instance joining the same consumer group, like another pod. */
